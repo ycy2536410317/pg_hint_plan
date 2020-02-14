@@ -14,6 +14,8 @@
  *-------------------------------------------------------------------------
  */
 
+#define BIG_ASS_ROW_NUM 100000000
+
 /*
  * adjust_rows: tweak estimated row numbers according to the hint.
  */
@@ -176,25 +178,25 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 			if (justforme->base.state == HINT_STATE_NOTUSED)
 				joinrel->rows = adjust_rows(joinrel->rows, justforme);
 		}
-		else
+		else if (domultiply)
 		{
-			if (domultiply)
-			{
-				/*
-				 * If we have multiple routes up to this joinrel which are not
-				 * applicable this hint, this multiply hint will applied more
-				 * than twice. But there's no means to know of that,
-				 * re-estimate the row number of this joinrel always just
-				 * before applying the hint. This is a bit different from
-				 * normal planner behavior but it doesn't harm so much.
-				 */
-				set_joinrel_size_estimates(root, joinrel, rel1, rel2, sjinfo,
-										   restrictlist);
-				
-				joinrel->rows = adjust_rows(joinrel->rows, domultiply);
-			}
-			
+      /*
+       * If we have multiple routes up to this joinrel which are not
+       * applicable this hint, this multiply hint will applied more
+       * than twice. But there's no means to know of that,
+       * re-estimate the row number of this joinrel always just
+       * before applying the hint. This is a bit different from
+       * normal planner behavior but it doesn't harm so much.
+       */
+      set_joinrel_size_estimates(root, joinrel, rel1, rel2, sjinfo,
+                     restrictlist);
+
+      joinrel->rows = adjust_rows(joinrel->rows, domultiply);
 		}
+    else
+    {
+			joinrel->rows = BIG_ASS_ROW_NUM;
+    }
 	}
 	/* !!! END: HERE IS THE PART WHICH ADDED FOR PG_HINT_PLAN !!! */
 
