@@ -14,7 +14,8 @@
  *-------------------------------------------------------------------------
  */
 
-#define BIG_ASS_ROW_NUM 100000000
+#define BIG_ASS_ROW_NUM 15000100010000000000.0
+/*#define BIG_ASS_ROW_NUM 15000100010*/
 
 /*
  * adjust_rows: tweak estimated row numbers according to the hint.
