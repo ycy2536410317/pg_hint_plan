@@ -25,30 +25,29 @@
 static double
 adjust_rows(double rows, RowsHint *hint)
 {
-	double		result = 0.0;	/* keep compiler quiet */
+	double result = 0.0; /* keep compiler quiet */
 
 	if (hint->value_type == RVT_ABSOLUTE)
 		result = hint->rows;
 	else if (hint->value_type == RVT_ADD)
 		result = rows + hint->rows;
 	else if (hint->value_type == RVT_SUB)
-		result =  rows - hint->rows;
+		result = rows - hint->rows;
 	else if (hint->value_type == RVT_MULTI)
 		result = rows * hint->rows;
 	else
-		Assert(false);	/* unrecognized rows value type */
+		Assert(false); /* unrecognized rows value type */
 
 	hint->base.state = HINT_STATE_USED;
 	if (result < 1.0)
 		ereport(WARNING,
 				(errmsg("Force estimate to be at least one row, to avoid possible divide-by-zero when interpolating costs : %s",
-					hint->base.hint_str)));
+						hint->base.hint_str)));
 	result = clamp_row_est(result);
-	elog(DEBUG1, "adjusted rows %d to %d", (int) rows, (int) result);
+	elog(DEBUG1, "adjusted rows %d to %d", (int)rows, (int)result);
 
 	return result;
 }
-
 
 /*
  * make_join_rel
@@ -65,12 +64,12 @@ adjust_rows(double rows, RowsHint *hint)
 RelOptInfo *
 make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 {
-	Relids		joinrelids;
+	Relids joinrelids;
 	SpecialJoinInfo *sjinfo;
-	bool		reversed;
+	bool reversed;
 	SpecialJoinInfo sjinfo_data;
 	RelOptInfo *joinrel;
-	List	   *restrictlist;
+	List *restrictlist;
 
 	/* We should never try to join two overlapping sets of rels. */
 	Assert(!bms_overlap(rel1->relids, rel2->relids));
@@ -128,78 +127,87 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 
 	/* !!! START: HERE IS THE PART WHICH ADDED FOR PG_HINT_PLAN !!! */
 	{
-		RowsHint   *rows_hint = NULL;
-		int			i;
-		RowsHint   *justforme = NULL;
-		RowsHint   *domultiply = NULL;
+		RowsHint *rows_hint = NULL;
+		int i;
+		RowsHint *justforme = NULL;
+		RowsHint *domultiply = NULL;
 
-		/* Search for applicable rows hint for this join node */
-		for (i = 0; i < current_hint_state->num_hints[HINT_TYPE_ROWS]; i++)
+		if (current_hint_state)
 		{
-			rows_hint = current_hint_state->rows_hints[i];
-
-			/*
-			 * Skip this rows_hint if it is invalid from the first or it
-			 * doesn't target any join rels.
-			 */
-			if (!rows_hint->joinrelids ||
-				rows_hint->base.state == HINT_STATE_ERROR)
-				continue;
-
-			if (bms_equal(joinrelids, rows_hint->joinrelids))
+			/* Search for applicable rows hint for this join node */
+			for (i = 0; i < current_hint_state->num_hints[HINT_TYPE_ROWS]; i++)
 			{
-				/*
-				 * This joinrel is just the target of this rows_hint, so tweak
-				 * rows estimation according to the hint.
-				 */
-				justforme = rows_hint;
-			}
-			else if (!(bms_is_subset(rows_hint->joinrelids, rel1->relids) ||
-					   bms_is_subset(rows_hint->joinrelids, rel2->relids)) &&
-					 bms_is_subset(rows_hint->joinrelids, joinrelids) &&
-					 rows_hint->value_type == RVT_MULTI)
-			{
-				/*
-				 * If the rows_hint's target relids is not a subset of both of
-				 * component rels and is a subset of this joinrel, ths hint's
-				 * targets spread over both component rels. This means that
-				 * this hint has been never applied so far and this joinrel is
-				 * the first (and only) chance to fire in current join tree.
-				 * Only the multiplication hint has the cumulative nature so we
-				 * apply only RVT_MULTI in this way.
-				 */
-				domultiply = rows_hint;
-			}
-		}
+				rows_hint = current_hint_state->rows_hints[i];
 
-		if (justforme)
-		{
-			/*
-			 * If a hint just for me is found, no other adjust method is
-			 * useless, but this cannot be more than twice becuase this joinrel
-			 * is already adjusted by this hint.
-			 */
-			if (justforme->base.state == HINT_STATE_NOTUSED)
-				joinrel->rows = adjust_rows(joinrel->rows, justforme);
-		}
-		else
-		{
-			if (domultiply)
-			{
 				/*
-				 * If we have multiple routes up to this joinrel which are not
-				 * applicable this hint, this multiply hint will applied more
-				 * than twice. But there's no means to know of that,
-				 * re-estimate the row number of this joinrel always just
-				 * before applying the hint. This is a bit different from
-				 * normal planner behavior but it doesn't harm so much.
+				 * Skip this rows_hint if it is invalid from the first or it
+				 * doesn't target any join rels.
 				 */
-				set_joinrel_size_estimates(root, joinrel, rel1, rel2, sjinfo,
-										   restrictlist);
+				if (!rows_hint->joinrelids ||
+					rows_hint->base.state == HINT_STATE_ERROR)
+					continue;
 
-				joinrel->rows = adjust_rows(joinrel->rows, domultiply);
+				/*
+				 * Skip this rows_hint if nrels = 1
+				 *
+				 */
+				if (rows_hint->nrels == 1)
+					continue;
+
+				if (bms_equal(joinrelids, rows_hint->joinrelids))
+				{
+					/*
+					 * This joinrel is just the target of this rows_hint, so tweak
+					 * rows estimation according to the hint.
+					 */
+					justforme = rows_hint;
+				}
+				else if (!(bms_is_subset(rows_hint->joinrelids, rel1->relids) ||
+						   bms_is_subset(rows_hint->joinrelids, rel2->relids)) &&
+						 bms_is_subset(rows_hint->joinrelids, joinrelids) &&
+						 rows_hint->value_type == RVT_MULTI)
+				{
+					/*
+					 * If the rows_hint's target relids is not a subset of both of
+					 * component rels and is a subset of this joinrel, ths hint's
+					 * targets spread over both component rels. This means that
+					 * this hint has been never applied so far and this joinrel is
+					 * the first (and only) chance to fire in current join tree.
+					 * Only the multiplication hint has the cumulative nature so we
+					 * apply only RVT_MULTI in this way.
+					 */
+					domultiply = rows_hint;
+				}
 			}
 
+			if (justforme)
+			{
+				/*
+				 * If a hint just for me is found, no other adjust method is
+				 * useless, but this cannot be more than twice becuase this joinrel
+				 * is already adjusted by this hint.
+				 */
+				if (justforme->base.state == HINT_STATE_NOTUSED)
+					joinrel->rows = adjust_rows(joinrel->rows, justforme);
+			}
+			else
+			{
+				if (domultiply)
+				{
+					/*
+					 * If we have multiple routes up to this joinrel which are not
+					 * applicable this hint, this multiply hint will applied more
+					 * than twice. But there's no means to know of that,
+					 * re-estimate the row number of this joinrel always just
+					 * before applying the hint. This is a bit different from
+					 * normal planner behavior but it doesn't harm so much.
+					 */
+					set_joinrel_size_estimates(root, joinrel, rel1, rel2, sjinfo,
+											   restrictlist);
+
+					joinrel->rows = adjust_rows(joinrel->rows, domultiply);
+				}
+			}
 		}
 	}
 	/* !!! END: HERE IS THE PART WHICH ADDED FOR PG_HINT_PLAN !!! */
@@ -217,12 +225,14 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 	/* Add paths to the join relation. */
 	populate_joinrel_with_paths(root, rel1, rel2, joinrel, sjinfo,
 								restrictlist);
+								
+	/* reset joinrel pathlist cost*/
+	
 
 	bms_free(joinrelids);
 
 	return joinrel;
 }
-
 
 /*
  * populate_joinrel_with_paths
@@ -254,8 +264,10 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 	 * We need only consider the jointypes that appear in join_info_list, plus
 	 * JOIN_INNER.
 	 */
-	switch (sjinfo->jointype)
+	if (dp_tree_shape == DP_DEFAULT || dp_tree_shape == DP_ZIGZAG)
 	{
+		switch (sjinfo->jointype)
+		{
 		case JOIN_INNER:
 			if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
 				restriction_is_constant_false(restrictlist, joinrel, false))
@@ -377,8 +389,243 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			break;
 		default:
 			/* other values not expected here */
-			elog(ERROR, "unrecognized join type: %d", (int) sjinfo->jointype);
+			elog(ERROR, "unrecognized join type: %d", (int)sjinfo->jointype);
 			break;
+		}
+	}
+	else if (dp_tree_shape == DP_LEFT)
+	{
+		switch (sjinfo->jointype)
+		{
+		case JOIN_INNER:
+			if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
+				restriction_is_constant_false(restrictlist, joinrel, false))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			add_paths_to_joinrel(root, joinrel, rel1, rel2,
+								 JOIN_INNER, sjinfo,
+								 restrictlist);
+			break;
+		case JOIN_LEFT:
+			if (is_dummy_rel(rel1) ||
+				restriction_is_constant_false(restrictlist, joinrel, true))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			if (restriction_is_constant_false(restrictlist, joinrel, false) &&
+				bms_is_subset(rel2->relids, sjinfo->syn_righthand))
+				mark_dummy_rel(rel2);
+			add_paths_to_joinrel(root, joinrel, rel1, rel2,
+								 JOIN_LEFT, sjinfo,
+								 restrictlist);
+			break;
+		case JOIN_FULL:
+			if ((is_dummy_rel(rel1) && is_dummy_rel(rel2)) ||
+				restriction_is_constant_false(restrictlist, joinrel, true))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			add_paths_to_joinrel(root, joinrel, rel1, rel2,
+								 JOIN_FULL, sjinfo,
+								 restrictlist);
+
+			/*
+			 * If there are join quals that aren't mergeable or hashable, we
+			 * may not be able to build any valid plan.  Complain here so that
+			 * we can give a somewhat-useful error message.  (Since we have no
+			 * flexibility of planning for a full join, there's no chance of
+			 * succeeding later with another pair of input rels.)
+			 */
+			if (joinrel->pathlist == NIL)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("FULL JOIN is only supported with merge-joinable or hash-joinable join conditions")));
+			break;
+		case JOIN_SEMI:
+
+			/*
+			 * We might have a normal semijoin, or a case where we don't have
+			 * enough rels to do the semijoin but can unique-ify the RHS and
+			 * then do an innerjoin (see comments in join_is_legal).  In the
+			 * latter case we can't apply JOIN_SEMI joining.
+			 */
+			if (bms_is_subset(sjinfo->min_lefthand, rel1->relids) &&
+				bms_is_subset(sjinfo->min_righthand, rel2->relids))
+			{
+				if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
+					restriction_is_constant_false(restrictlist, joinrel, false))
+				{
+					mark_dummy_rel(joinrel);
+					break;
+				}
+				add_paths_to_joinrel(root, joinrel, rel1, rel2,
+									 JOIN_SEMI, sjinfo,
+									 restrictlist);
+			}
+
+			/*
+			 * If we know how to unique-ify the RHS and one input rel is
+			 * exactly the RHS (not a superset) we can consider unique-ifying
+			 * it and then doing a regular join.  (The create_unique_path
+			 * check here is probably redundant with what join_is_legal did,
+			 * but if so the check is cheap because it's cached.  So test
+			 * anyway to be sure.)
+			 */
+			if (bms_equal(sjinfo->syn_righthand, rel2->relids) &&
+				create_unique_path(root, rel2, rel2->cheapest_total_path,
+								   sjinfo) != NULL)
+			{
+				if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
+					restriction_is_constant_false(restrictlist, joinrel, false))
+				{
+					mark_dummy_rel(joinrel);
+					break;
+				}
+				add_paths_to_joinrel(root, joinrel, rel1, rel2,
+									 JOIN_UNIQUE_INNER, sjinfo,
+									 restrictlist);
+			}
+			break;
+		case JOIN_ANTI:
+			if (is_dummy_rel(rel1) ||
+				restriction_is_constant_false(restrictlist, joinrel, true))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			if (restriction_is_constant_false(restrictlist, joinrel, false) &&
+				bms_is_subset(rel2->relids, sjinfo->syn_righthand))
+				mark_dummy_rel(rel2);
+			add_paths_to_joinrel(root, joinrel, rel1, rel2,
+								 JOIN_ANTI, sjinfo,
+								 restrictlist);
+			break;
+		default:
+			/* other values not expected here */
+			elog(ERROR, "unrecognized join type: %d", (int)sjinfo->jointype);
+			break;
+		}
+	}
+	else
+	{
+		switch (sjinfo->jointype)
+		{
+		case JOIN_INNER:
+			if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
+				restriction_is_constant_false(restrictlist, joinrel, false))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			add_paths_to_joinrel(root, joinrel, rel2, rel1,
+								 JOIN_INNER, sjinfo,
+								 restrictlist);
+			break;
+		case JOIN_LEFT:
+			if (is_dummy_rel(rel1) ||
+				restriction_is_constant_false(restrictlist, joinrel, true))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			if (restriction_is_constant_false(restrictlist, joinrel, false) &&
+				bms_is_subset(rel2->relids, sjinfo->syn_righthand))
+				mark_dummy_rel(rel2);
+			add_paths_to_joinrel(root, joinrel, rel2, rel1,
+								 JOIN_RIGHT, sjinfo,
+								 restrictlist);
+			break;
+		case JOIN_FULL:
+			if ((is_dummy_rel(rel1) && is_dummy_rel(rel2)) ||
+				restriction_is_constant_false(restrictlist, joinrel, true))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			add_paths_to_joinrel(root, joinrel, rel2, rel1,
+								 JOIN_FULL, sjinfo,
+								 restrictlist);
+
+			/*
+			 * If there are join quals that aren't mergeable or hashable, we
+			 * may not be able to build any valid plan.  Complain here so that
+			 * we can give a somewhat-useful error message.  (Since we have no
+			 * flexibility of planning for a full join, there's no chance of
+			 * succeeding later with another pair of input rels.)
+			 */
+			if (joinrel->pathlist == NIL)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("FULL JOIN is only supported with merge-joinable or hash-joinable join conditions")));
+			break;
+		case JOIN_SEMI:
+
+			/*
+			 * We might have a normal semijoin, or a case where we don't have
+			 * enough rels to do the semijoin but can unique-ify the RHS and
+			 * then do an innerjoin (see comments in join_is_legal).  In the
+			 * latter case we can't apply JOIN_SEMI joining.
+			 */
+			if (bms_is_subset(sjinfo->min_lefthand, rel1->relids) &&
+				bms_is_subset(sjinfo->min_righthand, rel2->relids))
+			{
+				if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
+					restriction_is_constant_false(restrictlist, joinrel, false))
+				{
+					mark_dummy_rel(joinrel);
+					break;
+				}
+				add_paths_to_joinrel(root, joinrel, rel2, rel1,
+									 JOIN_SEMI, sjinfo,
+									 restrictlist);
+			}
+
+			/*
+			 * If we know how to unique-ify the RHS and one input rel is
+			 * exactly the RHS (not a superset) we can consider unique-ifying
+			 * it and then doing a regular join.  (The create_unique_path
+			 * check here is probably redundant with what join_is_legal did,
+			 * but if so the check is cheap because it's cached.  So test
+			 * anyway to be sure.)
+			 */
+			if (bms_equal(sjinfo->syn_righthand, rel2->relids) &&
+				create_unique_path(root, rel2, rel2->cheapest_total_path,
+								   sjinfo) != NULL)
+			{
+				if (is_dummy_rel(rel1) || is_dummy_rel(rel2) ||
+					restriction_is_constant_false(restrictlist, joinrel, false))
+				{
+					mark_dummy_rel(joinrel);
+					break;
+				}
+				add_paths_to_joinrel(root, joinrel, rel2, rel1,
+									 JOIN_UNIQUE_OUTER, sjinfo,
+									 restrictlist);
+			}
+			break;
+		case JOIN_ANTI:
+			if (is_dummy_rel(rel1) ||
+				restriction_is_constant_false(restrictlist, joinrel, true))
+			{
+				mark_dummy_rel(joinrel);
+				break;
+			}
+			if (restriction_is_constant_false(restrictlist, joinrel, false) &&
+				bms_is_subset(rel2->relids, sjinfo->syn_righthand))
+				mark_dummy_rel(rel2);
+			add_paths_to_joinrel(root, joinrel, rel2, rel1,
+								 JOIN_ANTI, sjinfo,
+								 restrictlist);
+			break;
+		default:
+			/* other values not expected here */
+			elog(ERROR, "unrecognized join type: %d", (int)sjinfo->jointype);
+			break;
+		}
 	}
 
 	/* Apply partitionwise join technique, if possible. */

@@ -32,6 +32,7 @@
 #include "optimizer/planner.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/optimizer.h"
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
 #include "parser/scansup.h"
@@ -185,17 +186,21 @@ typedef int (*HintCmpFunction) (const Hint *a, const Hint *b);
 typedef const char *(*HintParseFunction) (Hint *hint, HintState *hstate,
 										  Query *parse, const char *str);
 
+static void
+pg_hint_plan_set_join_pathlist(PlannerInfo *root, RelOptInfo *joinrel,
+                               RelOptInfo *outerrel, RelOptInfo *innerrel,
+                               JoinType jointype, JoinPathExtraData *extra);
+
 /* hint types */
 #define NUM_HINT_TYPE	6
-typedef enum HintType
-{
-	HINT_TYPE_SCAN_METHOD,
-	HINT_TYPE_JOIN_METHOD,
-	HINT_TYPE_LEADING,
-	HINT_TYPE_SET,
-	HINT_TYPE_ROWS,
-	HINT_TYPE_PARALLEL
-} HintType;
+    typedef enum HintType {
+      HINT_TYPE_SCAN_METHOD,
+      HINT_TYPE_JOIN_METHOD,
+      HINT_TYPE_LEADING,
+      HINT_TYPE_SET,
+      HINT_TYPE_ROWS,
+      HINT_TYPE_PARALLEL
+    } HintType;
 
 typedef enum HintTypeBitmap
 {
@@ -566,6 +571,9 @@ static join_search_hook_type prev_join_search = NULL;
 static set_rel_pathlist_hook_type prev_set_rel_pathlist = NULL;
 static ProcessUtility_hook_type prev_ProcessUtility_hook = NULL;
 
+//TODO:
+static set_join_pathlist_hook_type prev_set_join_pathlist = NULL;
+
 /* Hold reference to currently active hint */
 static HintState *current_hint_state = NULL;
 
@@ -617,6 +625,16 @@ PLpgSQL_plugin  plugin_funcs = {
 	NULL,
 	NULL,
 };
+
+typedef enum tree_shape
+{
+	DP_DEFAULT,
+	DP_LEFT,
+	DP_RIGHT,
+	DP_ZIGZAG
+} tree_shape;
+
+static tree_shape dp_tree_shape = DP_DEFAULT;
 
 /*
  * Module load callbacks
@@ -695,10 +713,14 @@ _PG_init(void)
 	prev_join_search = join_search_hook;
 	join_search_hook = pg_hint_plan_join_search;
 	prev_set_rel_pathlist = set_rel_pathlist_hook;
+	prev_set_join_pathlist = set_join_pathlist_hook;
+	
+	
 	set_rel_pathlist_hook = pg_hint_plan_set_rel_pathlist;
 	prev_ProcessUtility_hook = ProcessUtility_hook;
 	ProcessUtility_hook = pg_hint_plan_ProcessUtility;
-
+	set_join_pathlist_hook = pg_hint_plan_set_join_pathlist;
+	
 	/* setup PL/pgSQL plugin hook */
 	var_ptr = (PLpgSQL_plugin **) find_rendezvous_variable("PLpgSQL_plugin");
 	*var_ptr = &plugin_funcs;
@@ -721,10 +743,78 @@ _PG_fini(void)
 	join_search_hook = prev_join_search;
 	set_rel_pathlist_hook = prev_set_rel_pathlist;
 	ProcessUtility_hook = prev_ProcessUtility_hook;
-
+	set_join_pathlist_hook = prev_set_join_pathlist;
 	/* uninstall PL/pgSQL plugin hook */
 	var_ptr = (PLpgSQL_plugin **) find_rendezvous_variable("PLpgSQL_plugin");
 	*var_ptr = NULL;
+}
+
+static void
+pg_hint_plan_set_join_pathlist(PlannerInfo *root, RelOptInfo *joinrel,
+                               RelOptInfo *outerrel, RelOptInfo *innerrel,
+                               JoinType jointype, JoinPathExtraData *extra) {
+        /* Call the original hook */
+        if (prev_set_join_pathlist)
+          prev_set_join_pathlist(root, joinrel, outerrel, innerrel,
+                                      jointype, extra);
+
+        /* for all the joinpath in pathlist, re-compute the cost */
+        if (joinrel->pathlist) 
+		{
+          ListCell *lc;
+          foreach (lc, joinrel->pathlist) 
+		  {
+            Path *path = (Path *)lfirst(lc);
+
+            if (path->pathtype == T_NestPath || path->pathtype == T_HashPath) 
+			{
+              JoinPath *jpath = (JoinPath *)path;
+              /* consider case 1: hashjoin, case 2: index nestloop join */
+              switch (jpath->path.pathtype) 
+			  {
+              	case T_NestPath:
+                /* check out if there is a index path */
+                if (jpath->innerjoinpath->pathtype == T_IndexScan) 
+				{
+                  /* cost = none index cost + index cost */
+                  double inner_cost = jpath->innerjoinpath->total_cost;
+                  double outer_cost = jpath->outerjoinpath->total_cost;
+                  double rows = jpath->path.rows;
+                  double outer_rows = jpath->outerjoinpath->rows;
+                  double ratio = Max(rows / outer_rows, 1);
+                  double cpu_cost = cpu_tuple_cost;
+                  jpath->path.total_cost =
+                      outer_cost + cpu_cost * ratio * index_param * outer_rows;
+                }
+
+                if (jpath->outerjoinpath->pathtype == T_IndexScan) 
+				{
+                  /* cost = none index cost + index cost */
+                  double inner_cost = jpath->innerjoinpath->total_cost;
+                  double outer_cost = jpath->outerjoinpath->total_cost;
+                  double rows = jpath->path.rows;
+                  double inner_rows = jpath->innerjoinpath->rows;
+                  double ratio = Max(rows / inner_rows, 1);
+                  double cpu_cost = cpu_tuple_cost;
+                  jpath->path.total_cost =
+                      inner_cost + cpu_cost * ratio * index_param * inner_rows;
+                }
+				break;
+
+              	case T_HashJoin:
+				int rows = jpath->path.rows;
+                double inner_cost = jpath->innerjoinpath->total_cost;
+                double outer_cost = jpath->outerjoinpath->total_cost;
+                jpath->path.total_cost =
+                cpu_tuple_cost * rows + inner_cost + outer_cost;
+                break;		
+
+              default:
+                break;
+              }
+            }
+          }
+        }
 }
 
 /*
