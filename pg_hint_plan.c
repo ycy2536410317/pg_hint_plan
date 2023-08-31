@@ -719,7 +719,7 @@ _PG_init(void)
 	set_rel_pathlist_hook = pg_hint_plan_set_rel_pathlist;
 	prev_ProcessUtility_hook = ProcessUtility_hook;
 	ProcessUtility_hook = pg_hint_plan_ProcessUtility;
-	set_join_pathlist_hook = pg_hint_plan_set_join_pathlist;
+	// set_join_pathlist_hook = pg_hint_plan_set_join_pathlist;
 	
 	/* setup PL/pgSQL plugin hook */
 	var_ptr = (PLpgSQL_plugin **) find_rendezvous_variable("PLpgSQL_plugin");
