@@ -564,6 +564,25 @@ static const struct config_enum_entry parse_debug_level_options[] = {
 	{NULL, 0, false}
 };
 
+typedef enum dp_tree_shape_enum
+{
+	DP_DEFAULT = 0,
+	DP_LEFT,
+	DP_RIGHT,
+	DP_ZIGZAG
+} dp_tree_shape_enum;
+
+static const struct config_enum_entry dp_tree_shape_options[] = {
+	{"default", DP_DEFAULT, false},
+	{"left", DP_LEFT, false},
+	{"right", DP_RIGHT, false},
+	{"zigzag", DP_ZIGZAG, false},
+	{NULL, 0, false}
+};
+
+static dp_tree_shape_enum dp_tree_shape = DP_DEFAULT;
+
+
 /* Saved hook values in case of unload */
 static post_parse_analyze_hook_type prev_post_parse_analyze_hook = NULL;
 static planner_hook_type prev_planner = NULL;
@@ -626,15 +645,8 @@ PLpgSQL_plugin  plugin_funcs = {
 	NULL,
 };
 
-typedef enum tree_shape
-{
-	DP_DEFAULT,
-	DP_LEFT,
-	DP_RIGHT,
-	DP_ZIGZAG
-} tree_shape;
 
-static tree_shape dp_tree_shape = DP_DEFAULT;
+
 
 /*
  * Module load callbacks
@@ -697,6 +709,18 @@ _PG_init(void)
 							 NULL,
 							 &pg_hint_plan_enable_hint_table,
 							 false,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+	
+	DefineCustomEnumVariable("pg_hint_plan.dp_tree_shape",
+							 "Shape of dependency tree.",
+							 NULL,
+							 &dp_tree_shape,
+							 DP_DEFAULT,
+							 dp_tree_shape_options,
 							 PGC_USERSET,
 							 0,
 							 NULL,

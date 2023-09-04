@@ -371,6 +371,10 @@ void join_search_one_level(PlannerInfo *root, int level)
 	 * suitable join clause (or join order restriction), in order to avoid
 	 * unreasonable growth of planning time.
 	 */
+	
+	/* get current dp_tree_shape guc */
+	
+	
 	if (dp_tree_shape == DP_DEFAULT)
 	{
 		for (k = 2;; k++)
